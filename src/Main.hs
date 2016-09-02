@@ -48,8 +48,9 @@ server port = do let codes = ["-map 0:0 -c:v libx265 -x265-params crf=25 -map_me
                               ]
                  serve HostAny port $ \(socket, remoteAddr) -> do
                      mapM_ (send socket) $ zipWith (command 1) [1..] codes
-                     forkIO $ let loop bs = if BS.length bs < 65535 then
+                     forkIO $ let loop bs = if BS.length bs < 65535 then do
                                               send socket $ packet 1 bs
+                                              send socket $ packet 1 BS.empty
                                             else do
                                               let (b, bss) = BS.splitAt 65535 bs
                                               send socket $ packet 1 b
