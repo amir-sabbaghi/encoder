@@ -38,6 +38,7 @@ readPacket s = do bs <- read s 3
                       where [index, l1, l2] = BS.unpack header
                             len = fromIntegral l1 * 256 + fromIntegral l2
   where read :: Socket -> Int -> IO (Maybe ByteString)
+        read s 0 = return $ Just BS.empty
         read s n = do mbs <- recv s n
                       case mbs of
                         Nothing -> return Nothing
