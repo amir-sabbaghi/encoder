@@ -4,6 +4,7 @@ module Server ( server
 import Network.Simple.TCP
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC (unpack)
+import Data.List (delete)
 import Control.Concurrent
 import Control.Concurrent.STM.TQueue
 import Control.Monad
@@ -54,10 +55,12 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
           do (path, min, name) <- atomically $ readTQueue todo
              mapM_ (send socket) $ zipWith (command 1) [1..] codes
              mapM_ (try . removeFile :: FilePath -> IO (Either IOException ())) $ map ((name ++).("_" ++).show) [1..length codes]
-             bracketOnError (ffmpegProc path min)
-                            (clean todo (path, min, name) . snd)
-                            (transfer name socket . fst)
-             atomically $ writeTQueue done (name, min)
+             succ <- bracketOnError (ffmpegProc path min)
+                                    (clean todo (path, min, name) . Just . snd)
+                                    (transfer name socket (length codes))
+             if succ
+               then atomically $ writeTQueue done (name, min)
+               else clean todo (path, min, name) Nothing
              worker socket remoteAddr
         ffmpegProc :: FilePath -> Int -> IO (Handle, ProcessHandle)
         ffmpegProc path min =
@@ -65,10 +68,13 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
                  ffmpeg = (proc "/usr/bin/ffmpeg" args) { std_out = CreatePipe }
              (Nothing, Just outh, Nothing, ph) <- createProcess ffmpeg
              return (outh, ph)
-        clean todo t h = do atomically $ unGetTQueue todo t
-                            terminateProcess h
-        transfer :: String -> Socket -> Handle -> IO ()
-        transfer name s h =
+        clean todo t@(_, _, name) mh = do atomically $ unGetTQueue todo t
+                                          mapM_ (try . removeFile :: FilePath -> IO (Either IOException ())) $ map ((name ++).("_" ++).show) [1..length codes]
+                                          case mh of
+                                            Nothing -> return ()
+                                            Just h  -> terminateProcess h
+        transfer :: String -> Socket -> Int -> (Handle, ProcessHandle) -> IO Bool
+        transfer name s l (h, ph) =
           do tid <- myThreadId
              forkIO $ handle (throwTo tid :: SomeException -> IO ()) $
                              while $ do bs <- BS.hGetSome h 65535
@@ -76,10 +82,20 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
                                           send s (packet 1 BS.empty) >> return False
                                         else
                                           send s (packet 1 bs) >> return True
-             while $ do mbs <- readPacket s
-                        case mbs of
-                          Nothing -> return False
-                          Just (i, bs) -> BS.appendFile (name ++ "-" ++ show i) bs >> return True
+             let loop [] = return True
+                 loop ind = do mbs <- readPacket s
+                               case mbs of
+                                 Nothing -> return False
+                                 Just (i, bs) -> if BS.null bs
+                                                   then loop (delete i ind)
+                                                   else BS.appendFile (name ++ "-" ++ show i) bs >> loop ind
+             b <- loop [1..fromIntegral l]
+             if b
+                then do code <- waitForProcess ph
+                        if code == ExitSuccess
+                          then return True
+                          else return False
+                else return False
 
 mergeServer :: TQueue (String, Int) -> TQueue (String, Int) -> IO ()
 mergeServer done number = return ()
