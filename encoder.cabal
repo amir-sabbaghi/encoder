@@ -12,13 +12,19 @@ cabal-version:       >=1.10
 executable encoder
   hs-source-dirs:      src
   main-is:             Main.hs
+  other-modules:       Client
+                     , Server
+                     , Packet
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
+                     , containers
                      , process
                      , directory
+                     , filepath
                      , network-simple
                      , bytestring
                      , optparse-applicative < 0.13
                      , stm
   default-language:    Haskell2010
+  default-extensions:  ScopedTypeVariables
 
