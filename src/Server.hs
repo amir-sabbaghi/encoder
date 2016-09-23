@@ -4,7 +4,7 @@ module Server ( server
 import Network.Simple.TCP
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC (unpack)
-import Data.List (delete)
+import Data.List as L
 import Data.Word
 import Data.Maybe (fromJust)
 import Data.Map as M (Map, delete, (!), null, fromList)
@@ -44,7 +44,7 @@ managementServer port todo film = serve HostAny port $ \(socket, remoteAddr) ->
      callProcess "/usr/bin/ffmpeg" args
      mins <- totalMinutes path
      atomically $ mapM_ (\i -> writeTQueue todo (name ++ "-" ++ show i ++ ".mkv", name, i)) [0..mins]
-     atomically $ writeTQueue film (path, mins+1)
+     atomically $ writeTQueue film (name, mins)
      where recvAll s = do mbs <- recv s 1024
                           case mbs of
                             Nothing -> return BS.empty
@@ -54,7 +54,7 @@ managementServer port todo film = serve HostAny port $ \(socket, remoteAddr) ->
                                   (exitCode, out, err) <- readProcessWithExitCode "/usr/bin/ffprobe" args ""
                                   assert (exitCode == ExitSuccess) $ return .(`div` 60). ceiling . read $ out
 
-queueServer :: String -> TQueue (FilePath, String, Int) -> TQueue (FilePath, String, Int) -> IO ()
+queueServer :: String -> TQueue (FilePath, String, Int) -> TQueue ([(String, FilePath)], String, Int) -> IO ()
 queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
   do putStrLn $ "Worker connected from " ++ show remoteAddr
      worker socket remoteAddr
@@ -64,14 +64,14 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
              let fileNames = map (`addExtension` "mkv") $ map ((dropExtension path ++ "-") ++) $ map fst codes
                  unget = do clean fileNames
                             atomically $ unGetTQueue todo (path, name, min)
-             print fileNames
-             clean fileNames
-             let work = bracket (openFile path ReadMode)
+                 work = bracket (openFile path ReadMode)
                                 (hClose)
                                 (transfer socket (fromList $ zip [1..] fileNames))
+             print fileNames
+             clean fileNames
              succ <- onException work unget
              if succ
-               then atomically $ writeTQueue done (path, name, min)
+               then atomically $ writeTQueue done (zip (map fst codes) fileNames, name, min)
                else unget
              worker socket remoteAddr
         clean :: [FilePath] -> IO ()
@@ -95,8 +95,26 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
                                                          else BS.appendFile (i2f ! i) bs >> loop i2f
              loop i2f
 
-mergeServer :: TQueue (FilePath, String, Int) -> TQueue (String, Int) -> IO ()
-mergeServer done number = return ()
+mergeServer :: TQueue ([(String, FilePath)], String, Int) -> TQueue (String, Int) -> IO ()
+mergeServer done film = do (name, num) <- atomically $ readTQueue film
+                           files <- waitForNum name [0..num]
+                           let sorted = concat $ map snd $ sort files
+                               dirs = map fst codes
+                               flt l d = map snd $ filter ((== d) . fst) l
+                               outputs = zip dirs $ map (flt sorted) dirs
+                           handle (\(e :: SomeException) -> putStrLn $ "merge failed for " ++ name ++ ": " ++ show e)
+                                  (mapM_ (uncurry.merge $ name) outputs)
+                           return ()
+                        where waitForNum _ [] = return []
+                              waitForNum name nums = do (f, n, i) <- atomically $ readTQueue done
+                                                        if n == name
+                                                          then do rest <- waitForNum name (L.delete i nums)
+                                                                  return $ (i, f):rest
+                                                          else do atomically $ writeTQueue done (f, n, i)
+                                                                  waitForNum name nums
+                              merge :: String -> FilePath -> [FilePath] -> IO ()
+                              merge name dir files = let list = "concat:" ++ intercalate "|" files
+                                                      in callProcess "/usr/bin/ffmpeg" ["-i", list, "-c", "copy", dir </> name <.> "mkv"]
 
 while :: IO Bool -> IO ()
 while f = do r <- f
