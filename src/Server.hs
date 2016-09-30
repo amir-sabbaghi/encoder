@@ -22,9 +22,9 @@ import GHC.IO.Handle
 
 import Packet
 
-codes = [("1080p","-map 0:0 -c:v libx265 -x265-params crf=25 -map_metadata -1 -metadata:s:0 language=en")
-        ,("720p", "-map 0:0 -c:v libx265 -x265-params crf=25 -map_metadata -1 -metadata:s:0 language=en -s 1280x720")
-        ,("audio","-map 0:1 -c:a aac -ac 2 -b:a 128k -strict -2 -map_metadata -1 -metadata:s:0 language=en")
+codes = [("1080p","-map 0:0 -c:v libx265 -x265-params crf=25 -map_metadata -1 -metadata:s:0 language=en -f matroska")
+        ,("720p", "-map 0:0 -c:v libx265 -x265-params crf=25 -map_metadata -1 -metadata:s:0 language=en -s 1280x720 -f matroska")
+        ,("audio","-map 0:1 -c:a aac -ac 2 -b:a 128k -strict -2 -map_metadata -1 -metadata:s:0 language=en -f matroska")
         ]
 
 server :: String -> String -> IO ()
