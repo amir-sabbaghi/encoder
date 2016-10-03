@@ -41,7 +41,7 @@ managementServer port todo film = serve HostAny port $ \(socket, remoteAddr) ->
      let [path,name] = read $ BSC.unpack bs
          args = ["-i",path,"-f","segment","-segment_time","60","-c","copy",name ++ "-%d.mkv"]
      print $ [path,name]
-     callProcess "/usr/bin/ffmpeg" args
+     callProcess "ffmpeg" args
      mins <- totalMinutes path
      atomically $ mapM_ (\i -> writeTQueue todo (name ++ "-" ++ show i ++ ".mkv", name, i)) [0..mins]
      atomically $ writeTQueue film (name, mins)
@@ -51,7 +51,7 @@ managementServer port todo film = serve HostAny port $ \(socket, remoteAddr) ->
                             Just bs -> recvAll s >>= (return . BS.append bs)
            totalMinutes :: FilePath -> IO Int
            totalMinutes path = do let args = ["-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",path]
-                                  (exitCode, out, err) <- readProcessWithExitCode "/usr/bin/ffprobe" args ""
+                                  (exitCode, out, err) <- readProcessWithExitCode "ffprobe" args ""
                                   assert (exitCode == ExitSuccess) $ return .(`div` 60). ceiling . read $ out
 
 queueServer :: String -> TQueue (FilePath, String, Int) -> TQueue ([(String, FilePath)], String, Int) -> IO ()
@@ -115,7 +115,7 @@ mergeServer done film = do (name, num) <- atomically $ readTQueue film
                               merge :: String -> FilePath -> [FilePath] -> IO ()
                               merge name dir files = do let list = unlines $ "ffconcat version 1.0":map ("file "++) files
                                                         writeFile "concat.txt" list
-                                                        callProcess "/usr/bin/ffmpeg" ["-f", "concat", "-i", "concat.txt", "-c", "copy", dir </> name <.> "mp4"]
+                                                        callProcess "ffmpeg" ["-f", "concat", "-i", "concat.txt", "-c", "copy", dir </> name <.> "mp4"]
 
 while :: IO Bool -> IO ()
 while f = do r <- f

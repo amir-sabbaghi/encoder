@@ -21,10 +21,10 @@ client host port = connect host port $ \(socket, addr) -> do
                               Nothing -> mapM_ terminateProcess $ map fst $ concat $ map snd m
                               Just (0, bs) -> do let (input, output, flags) = parseControlPacket bs
                                                      args = "-i":"-":words flags ++ ["pipe:1"]
-                                                     ffmpeg = (proc "/usr/bin/ffmpeg" args) { std_in  = CreatePipe
-                                                                                            , std_out = CreatePipe
-                                                                                            , std_err = CreatePipe
-                                                                                            }
+                                                     ffmpeg = (proc "ffmpeg" args) { std_in  = CreatePipe
+                                                                                   , std_out = CreatePipe
+                                                                                   , std_err = CreatePipe
+                                                                                   }
                                                  print args
                                                  (Just inh, Just outh, Just errh, ph) <- createProcess ffmpeg
                                                  putStrLn $ "ffmpeg process created"
