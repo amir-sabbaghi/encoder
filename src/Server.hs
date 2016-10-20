@@ -62,8 +62,9 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
           do (path, name, min) <- atomically $ readTQueue todo
              mapM_ (send socket) $ zipWith (command 1) [1..] $ map snd codes
              let fileNames = map (`addExtension` "mkv") $ map ((dropExtension path ++ "-") ++) $ map fst codes
-                 unget = do clean fileNames
+                 unget = do putStrLn $ "Converting " ++ name ++ "-" ++ show min ++ " failed"
                             atomically $ unGetTQueue todo (path, name, min)
+                            clean fileNames
                  work = bracket (openFile path ReadMode)
                                 (hClose)
                                 (transfer socket (fromList $ zip [1..] fileNames))
@@ -108,7 +109,8 @@ mergeServer done film = do (name, num) <- atomically $ readTQueue film
                         where waitForNum _ [] = return []
                               waitForNum name nums = do (f, n, i) <- atomically $ readTQueue done
                                                         if n == name
-                                                          then do rest <- waitForNum name (L.delete i nums)
+                                                          then do putStrLn $ "Converting " ++ name ++ "-" ++ show i ++ " done. " ++ show (length nums - 1) ++ " to go."
+                                                                  rest <- waitForNum name (L.delete i nums)
                                                                   return $ (i, f):rest
                                                           else do atomically $ writeTQueue done (f, n, i)
                                                                   waitForNum name nums
