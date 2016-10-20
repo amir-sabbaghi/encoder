@@ -128,7 +128,7 @@ mergeServer done film = do (name, num) <- atomically $ readTQueue film
                               merge :: String -> FilePath -> [FilePath] -> IO ()
                               merge name dir files = do let list = unlines $ "ffconcat version 1.0":map ("file "++) files
                                                         writeFile "concat.txt" list
-                                                        callProcess "ffmpeg" ["-f", "concat", "-i", "concat.txt", "-c", "copy", dir </> name <.> "mp4"]
+                                                        callProcess "ffmpeg" ["-f", "concat", "-i", "concat.txt", "-c", "copy", dir </> name <.> "mkv"]
 
 while :: IO Bool -> IO ()
 while f = do r <- f
