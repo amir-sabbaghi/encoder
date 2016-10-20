@@ -5,6 +5,7 @@ import Network.Simple.TCP
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC (unpack)
 import Data.List as L
+import Data.Char
 import Data.Word
 import Data.Maybe (fromJust)
 import Data.Map as M (Map, delete, (!), null, fromList)
@@ -42,17 +43,18 @@ managementServer port todo film = serve HostAny port $ \(socket, remoteAddr) ->
          args = ["-i",path,"-f","segment","-segment_time","60","-c","copy",name ++ "-%d.mkv"]
      print $ [path,name]
      callProcess "ffmpeg" args
-     mins <- totalMinutes path
-     atomically $ mapM_ (\i -> writeTQueue todo (name ++ "-" ++ show i ++ ".mkv", name, i)) [0..mins]
-     atomically $ writeTQueue film (name, mins)
+     num <- numberOfSegments name
+     atomically $ mapM_ (\i -> writeTQueue todo (name ++ "-" ++ show i ++ ".mkv", name, i)) [0..num-1]
+     atomically $ writeTQueue film (name, num-1)
      where recvAll s = do mbs <- recv s 1024
                           case mbs of
                             Nothing -> return BS.empty
                             Just bs -> recvAll s >>= (return . BS.append bs)
-           totalMinutes :: FilePath -> IO Int
-           totalMinutes path = do let args = ["-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",path]
-                                  (exitCode, out, err) <- readProcessWithExitCode "ffprobe" args ""
-                                  assert (exitCode == ExitSuccess) $ return .(`div` 60). ceiling . read $ out
+           numberOfSegments :: String -> IO Int
+           numberOfSegments name = do files <- getCurrentDirectory >>= getDirectoryContents
+                                      let mkvs = map (\s -> take (length s - 4) s) $ filter (isSuffixOf ".mkv") $ files
+                                          len = length $ filter (all isDigit) $ map (drop (length name + 1)) $ filter (isPrefixOf (name ++ "-")) $ mkvs
+                                      return len
 
 queueServer :: String -> TQueue (FilePath, String, Int) -> TQueue ([(String, FilePath)], String, Int) -> IO ()
 queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
