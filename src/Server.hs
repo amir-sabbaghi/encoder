@@ -40,7 +40,7 @@ managementServer :: String -> TQueue (FilePath, String, Int) -> TQueue (String, 
 managementServer port todo film = serve HostAny port $ \(socket, remoteAddr) ->
   do bs <- recvAll socket
      let [path,name] = read $ BSC.unpack bs
-         args = ["-i",path,"-f","segment","-segment_time","60","-c","copy",name ++ "-%d.mkv"]
+         args = ["-i",path,"-f","segment","-segment_time","60","-c","copy","-y",name ++ "-%d.mkv"]
      print $ [path,name]
      callProcess "ffmpeg" args
      num <- numberOfSegments name
@@ -64,13 +64,12 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
           do (path, name, min) <- atomically $ readTQueue todo
              mapM_ (send socket) $ zipWith (command 1) [1..] $ map snd codes
              let fileNames = map (`addExtension` "mkv") $ map ((dropExtension path ++ "-") ++) $ map fst codes
-                 args = ["-i","pipe:0","-c","copy"]
+                 args = ["-i","pipe:0","-c","copy","-y"]
                  procs = map (\p -> p { std_in = CreatePipe, std_err = CreatePipe }) $ map (proc "ffmpeg") $ map (\f -> args ++ [f]) fileNames
                  unget = do putStrLn $ "Converting " ++ name ++ "-" ++ show min ++ " failed"
                             atomically $ unGetTQueue todo (path, name, min)
                             clean fileNames
              print fileNames
-             clean fileNames
              handles <- mapM createProcess procs
              let (stdins, _, _, phs) = unzip4 handles
                  ins = map fromJust stdins
@@ -128,7 +127,7 @@ mergeServer done film = do (name, num) <- atomically $ readTQueue film
                               merge :: String -> FilePath -> [FilePath] -> IO ()
                               merge name dir files = do let list = unlines $ "ffconcat version 1.0":map ("file "++) files
                                                         writeFile "concat.txt" list
-                                                        callProcess "ffmpeg" ["-f", "concat", "-i", "concat.txt", "-c", "copy", dir </> name <.> "mkv"]
+                                                        callProcess "ffmpeg" ["-f", "concat", "-i", "concat.txt", "-c", "copy", "-y", dir </> name <.> "mkv"]
 
 while :: IO Bool -> IO ()
 while f = do r <- f
