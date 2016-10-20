@@ -64,23 +64,32 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
           do (path, name, min) <- atomically $ readTQueue todo
              mapM_ (send socket) $ zipWith (command 1) [1..] $ map snd codes
              let fileNames = map (`addExtension` "mkv") $ map ((dropExtension path ++ "-") ++) $ map fst codes
+                 args = ["-i","pipe:0","-c","copy"]
+                 procs = map (\p -> p { std_in = CreatePipe, std_err = CreatePipe }) $ map (proc "ffmpeg") $ map (\f -> args ++ [f]) fileNames
                  unget = do putStrLn $ "Converting " ++ name ++ "-" ++ show min ++ " failed"
                             atomically $ unGetTQueue todo (path, name, min)
                             clean fileNames
-                 work = bracket (openFile path ReadMode)
-                                (hClose)
-                                (transfer socket (fromList $ zip [1..] fileNames))
              print fileNames
              clean fileNames
+             handles <- mapM createProcess procs
+             let (stdins, _, _, phs) = unzip4 handles
+                 ins = map fromJust stdins
+                 work = bracket (openFile path ReadMode)
+                                (hClose)
+                                (transfer socket (fromList $ zip [1..] ins))
              succ <- onException work unget
              if succ
-               then atomically $ writeTQueue done (zip (map fst codes) fileNames, name, min)
-               else unget
+               then do exitCodes <- mapM waitForProcess phs
+                       if all (== ExitSuccess) exitCodes
+                         then atomically $ writeTQueue done (zip (map fst codes) fileNames, name, min)
+                         else unget
+               else do mapM terminateProcess phs
+                       unget
              worker socket remoteAddr
         clean :: [FilePath] -> IO ()
         clean paths = mapM_ (try . removeFile :: FilePath -> IO (Either IOException ())) paths
-        transfer :: Socket -> Map Word8 FilePath -> Handle -> IO Bool
-        transfer s i2f h =
+        transfer :: Socket -> Map Word8 Handle -> Handle -> IO Bool
+        transfer s i2h h =
           do tid <- myThreadId
              forkIO $ handle (throwTo tid :: SomeException -> IO ()) $
                              while $ do bs <- BS.hGetSome h 65535
@@ -88,15 +97,15 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
                                           send s (packet 1 BS.empty) >> return False
                                         else
                                           send s (packet 1 bs) >> return True
-             let loop i2f
-                   | M.null i2f = return True
+             let loop i2h
+                   | M.null i2h = return True
                    | otherwise  = do mbs <- readPacket s
                                      case mbs of
                                        Nothing -> return False
                                        Just (i, bs) -> if BS.null bs
-                                                         then loop (M.delete i i2f)
-                                                         else BS.appendFile (i2f ! i) bs >> loop i2f
-             loop i2f
+                                                         then hClose (i2h ! i) >> loop (M.delete i i2h)
+                                                         else BS.hPut (i2h ! i) bs >> loop i2h
+             loop i2h
 
 mergeServer :: TQueue ([(String, FilePath)], String, Int) -> TQueue (String, Int) -> IO ()
 mergeServer done film = do (name, num) <- atomically $ readTQueue film
