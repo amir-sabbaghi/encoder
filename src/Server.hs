@@ -80,7 +80,8 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
              if succ
                then do exitCodes <- mapM waitForProcess phs
                        if all (== ExitSuccess) exitCodes
-                         then atomically $ writeTQueue done (zip (map fst codes) fileNames, name, min)
+                         then do removeFile path
+                                 atomically $ writeTQueue done (zip (map fst codes) fileNames, name, min)
                          else unget
                else do mapM terminateProcess phs
                        unget
@@ -114,7 +115,8 @@ mergeServer done film = do (name, num) <- atomically $ readTQueue film
                                flt l d = map snd $ filter ((== d) . fst) l
                                outputs = zip dirs $ map (flt sorted) dirs
                            handle (\(e :: SomeException) -> putStrLn $ "merge failed for " ++ name ++ ": " ++ show e)
-                                  (mapM_ (uncurry.merge $ name) outputs)
+                                  (do mapM_ (uncurry.merge $ name) outputs
+                                      mapM_ (removeFile.snd) sorted)
                            return ()
                         where waitForNum _ [] = return []
                               waitForNum name nums = do (f, n, i) <- atomically $ readTQueue done
