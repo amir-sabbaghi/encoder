@@ -5,6 +5,7 @@ packages:
 extra-deps:
 - ansi-terminal-0.6.2.3
 - ansi-wl-pprint-0.6.7.3
+- async-2.1.0
 - exceptions-0.8.3
 - mtl-2.2.1
 - network-2.6.3.1
@@ -12,6 +13,4 @@ extra-deps:
 - optparse-applicative-0.12.1.0
 - stm-2.4.4.1
 - transformers-compat-0.5.1.4
-- ghc-paths-0.1.0.9
-- syb-0.6
 resolver: ghc-7.10.3
