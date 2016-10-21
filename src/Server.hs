@@ -82,10 +82,10 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
                        if all (== ExitSuccess) exitCodes
                          then do removeFile path
                                  atomically $ writeTQueue done (zip (map fst codes) fileNames, name, min)
+                                 worker socket remoteAddr
                          else unget
                else do mapM terminateProcess phs
                        unget
-             worker socket remoteAddr
         clean :: [FilePath] -> IO ()
         clean paths = mapM_ (try . removeFile :: FilePath -> IO (Either IOException ())) paths
         transfer :: Socket -> Map Word8 Handle -> Handle -> IO Bool
