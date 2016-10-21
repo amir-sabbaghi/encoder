@@ -10,6 +10,7 @@ import Data.Word
 import Data.Maybe (fromJust)
 import Data.Map as M (Map, delete, (!), null, fromList)
 import Control.Concurrent
+import Control.Concurrent.Async
 import Control.Concurrent.STM.TQueue
 import Control.Monad
 import Control.Monad.STM (atomically)
@@ -62,7 +63,6 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
      worker socket remoteAddr
   where worker socket remoteAddr =
           do (path, name, min) <- atomically $ readTQueue todo
-             mapM_ (send socket) $ zipWith (command 1) [1..] $ map snd codes
              let fileNames = map (`addExtension` "mkv") $ map ((dropExtension path ++ "-") ++) $ map fst codes
                  args = ["-i","pipe:0","-c","copy","-y"]
                  procs = map (\p -> p { std_in = CreatePipe, std_err = CreatePipe }) $ map (proc "ffmpeg") $ map (\f -> args ++ [f]) fileNames
@@ -90,13 +90,12 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
         clean paths = mapM_ (try . removeFile :: FilePath -> IO (Either IOException ())) paths
         transfer :: Socket -> Map Word8 Handle -> Handle -> IO Bool
         transfer s i2h h =
-          do tid <- myThreadId
-             forkIO $ handle (throwTo tid :: SomeException -> IO ()) $
-                             while $ do bs <- BS.hGetSome h 65535
-                                        if BS.null bs then
-                                          send s (packet 1 BS.empty) >> return False
-                                        else
-                                          send s (packet 1 bs) >> return True
+          do mapM_ (send s) $ zipWith (command 1) [1..] $ map snd codes
+             a <- async $ while $ do bs <- BS.hGetSome h 65535
+                                     if BS.null bs then
+                                       send s (packet 1 BS.empty) >> return False
+                                     else
+                                       send s (packet 1 bs) >> return True
              let loop i2h
                    | M.null i2h = return True
                    | otherwise  = do mbs <- readPacket s
@@ -105,7 +104,9 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
                                        Just (i, bs) -> if BS.null bs
                                                          then hClose (i2h ! i) >> loop (M.delete i i2h)
                                                          else BS.hPut (i2h ! i) bs >> loop i2h
-             loop i2h
+             b <- async $ loop i2h
+             (_, r) <- waitBoth a b `onException` (cancel a >> cancel b)
+             return r
 
 mergeServer :: TQueue ([(String, FilePath)], String, Int) -> TQueue (String, Int) -> IO ()
 mergeServer done film = do (name, num) <- atomically $ readTQueue film
