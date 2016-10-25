@@ -118,7 +118,7 @@ mergeServer done film = do (name, num) <- atomically $ readTQueue film
                            handle (\(e :: SomeException) -> putStrLn $ "merge failed for " ++ name ++ ": " ++ show e)
                                   (do mapM_ (uncurry.merge $ name) outputs
                                       mapM_ (removeFile.snd) sorted)
-                           return ()
+                           mergeServer done film
                         where waitForNum _ [] = return []
                               waitForNum name nums = do (f, n, i) <- atomically $ readTQueue done
                                                         if n == name
