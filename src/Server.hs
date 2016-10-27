@@ -32,20 +32,19 @@ server port mport = do todo <- atomically $ newTQueue
                        forkIO $ mergeServer done film
                        queueServer port todo done
 
-managementServer :: String -> TQueue (FilePath, String, Int, [(String, String)], Bool) -> TQueue (String, Int, [String]) -> IO ()
+managementServer :: String -> TQueue (FilePath, String, Int, [(String, String)]) -> TQueue (String, Int, [String]) -> IO ()
 managementServer port todo film = serve HostAny port $ \(socket, remoteAddr) ->
   do bs <- recvAll socket
-     let path:name:segmentTime:rest = read $ BSC.unpack bs
+     let path:name:stream:segmentTime:rest = read $ BSC.unpack bs
          codes = convertListToTriple rest
-     print $ [path,name]
-     if segmentTime == "no"
-       then do atomically $ writeTQueue todo (path, name, 0, codes, False)
-               atomically $ writeTQueue film (name, 0, map fst codes)
-       else do let args = ["-i",path,"-f","segment","-segment_time",segmentTime,"-c","copy","-y",name ++ "-%d.mkv"]
-               callProcess "ffmpeg" args
-               num <- numberOfSegments name
-               atomically $ mapM_ (\i -> writeTQueue todo (name ++ "-" ++ show i ++ ".mkv", name, i, codes, True)) [0..num-1]
-               atomically $ writeTQueue film (name, num-1, map fst codes)
+         segmentArgs = if segmentTime == "no" then [] else ["-f","segment","-segment_time",segmentTime]
+         nameArg = if segmentTime == "no" then name ++ "-" ++ stream ++ "-0.mkv" else name ++ "-" ++ stream ++ "-%d.mkv"
+         args = ["-i",path,"-map","0:" ++ stream,"-c","copy","-y"] ++ segmentArgs ++ [nameArg]
+     callProcess "ffmpeg" args
+     print $ [path,name,stream,segmentTime] ++ rest
+     num <- if segmentTime == "no" then return 1 else numberOfSegments (name ++ "-" ++ stream)
+     atomically $ mapM_ (\i -> writeTQueue todo (name ++ "-" ++ stream ++ "-" ++ show i ++ ".mkv", name, i, codes)) [0..num-1]
+     atomically $ writeTQueue film (name, num-1, map fst codes)
      where recvAll s = do mbs <- recv s 1024
                           case mbs of
                             Nothing -> return BS.empty
@@ -59,17 +58,17 @@ managementServer port todo film = serve HostAny port $ \(socket, remoteAddr) ->
            convertListToTriple [] = []
            convertListToTriple (f:s:list) = (f, s):convertListToTriple list
 
-queueServer :: String -> TQueue (FilePath, String, Int, [(String, String)], Bool) -> TQueue ([(String, FilePath)], String, Int) -> IO ()
+queueServer :: String -> TQueue (FilePath, String, Int, [(String, String)]) -> TQueue ([(String, FilePath)], String, Int) -> IO ()
 queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
   do putStrLn $ "Worker connected from " ++ show remoteAddr
      worker socket remoteAddr
   where worker socket remoteAddr =
-          do (path, name, min, codes, shouldDelete) <- atomically $ readTQueue todo
-             let fileNames = map (`addExtension` "mkv") $ map ((name ++ "-") ++) $ map fst codes
+          do (path, name, min, codes) <- atomically $ readTQueue todo
+             let fileNames = map (\s -> name ++ "-" ++ s ++ "-" ++ show min ++ ".mkv") $ map fst codes
                  args = ["-i","pipe:0","-c","copy","-y"]
                  procs = map (\p -> p { std_in = CreatePipe, std_err = CreatePipe }) $ map (proc "ffmpeg") $ map (\f -> args ++ [f]) fileNames
                  unget = do putStrLn $ "Converting " ++ name ++ "-" ++ show min ++ " failed"
-                            atomically $ unGetTQueue todo (path, name, min, codes, shouldDelete)
+                            atomically $ unGetTQueue todo (path, name, min, codes)
                             clean fileNames
              print fileNames
              handles <- mapM createProcess procs
@@ -82,7 +81,7 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
              if succ
                then do exitCodes <- mapM waitForProcess phs
                        if all (== ExitSuccess) exitCodes
-                         then do when shouldDelete $ removeFile path
+                         then do removeFile path
                                  atomically $ writeTQueue done (zip (map fst codes) fileNames, name, min)
                                  worker socket remoteAddr
                          else unget
