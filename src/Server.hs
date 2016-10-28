@@ -32,7 +32,7 @@ server port mport = do todo <- atomically $ newTQueue
                        forkIO $ mergeServer done film
                        queueServer port todo done
 
-managementServer :: String -> TQueue (FilePath, String, Int, [(String, String)]) -> TQueue (String, Int, [String]) -> IO ()
+managementServer :: String -> TQueue (FilePath, String, String, Int, [(String, String)]) -> TQueue (String, String, Int, [String]) -> IO ()
 managementServer port todo film = serve HostAny port $ \(socket, remoteAddr) ->
   do bs <- recvAll socket
      let path:name:stream:segmentTime:rest = read $ BSC.unpack bs
@@ -43,8 +43,8 @@ managementServer port todo film = serve HostAny port $ \(socket, remoteAddr) ->
      callProcess "ffmpeg" args
      print $ [path,name,stream,segmentTime] ++ rest
      num <- if segmentTime == "no" then return 1 else numberOfSegments (name ++ "-" ++ stream)
-     atomically $ mapM_ (\i -> writeTQueue todo (name ++ "-" ++ stream ++ "-" ++ show i ++ ".mkv", name, i, codes)) [0..num-1]
-     atomically $ writeTQueue film (name, num-1, map fst codes)
+     atomically $ mapM_ (\i -> writeTQueue todo (name ++ "-" ++ stream ++ "-" ++ show i ++ ".mkv", name, stream, i, codes)) [0..num-1]
+     atomically $ writeTQueue film (name, stream, num-1, map fst codes)
      where recvAll s = do mbs <- recv s 1024
                           case mbs of
                             Nothing -> return BS.empty
@@ -58,17 +58,17 @@ managementServer port todo film = serve HostAny port $ \(socket, remoteAddr) ->
            convertListToTriple [] = []
            convertListToTriple (f:s:list) = (f, s):convertListToTriple list
 
-queueServer :: String -> TQueue (FilePath, String, Int, [(String, String)]) -> TQueue ([(String, FilePath)], String, Int) -> IO ()
+queueServer :: String -> TQueue (FilePath, String, String, Int, [(String, String)]) -> TQueue ([(String, FilePath)], String, String, Int) -> IO ()
 queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
   do putStrLn $ "Worker connected from " ++ show remoteAddr
      worker socket remoteAddr
   where worker socket remoteAddr =
-          do (path, name, min, codes) <- atomically $ readTQueue todo
+          do (path, name, stream, min, codes) <- atomically $ readTQueue todo
              let fileNames = map (\s -> name ++ "-" ++ s ++ "-" ++ show min ++ ".mkv") $ map fst codes
                  args = ["-i","pipe:0","-c","copy","-y"]
                  procs = map (\p -> p { std_in = CreatePipe, std_err = CreatePipe }) $ map (proc "ffmpeg") $ map (\f -> args ++ [f]) fileNames
                  unget = do putStrLn $ "Converting " ++ name ++ "-" ++ show min ++ " failed"
-                            atomically $ unGetTQueue todo (path, name, min, codes)
+                            atomically $ unGetTQueue todo (path, name, stream, min, codes)
                             clean fileNames
              print fileNames
              handles <- mapM createProcess procs
@@ -82,7 +82,7 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
                then do exitCodes <- mapM waitForProcess phs
                        if all (== ExitSuccess) exitCodes
                          then do removeFile path
-                                 atomically $ writeTQueue done (zip (map fst codes) fileNames, name, min)
+                                 atomically $ writeTQueue done (zip (map fst codes) fileNames, name, stream, min)
                                  worker socket remoteAddr
                          else unget
                else do mapM terminateProcess phs
@@ -109,9 +109,9 @@ queueServer port todo done = serve HostAny port $ \(socket, remoteAddr) ->
              (_, r) <- waitBoth a b `onException` (cancel a >> cancel b)
              return r
 
-mergeServer :: TQueue ([(String, FilePath)], String, Int) -> TQueue (String, Int, [String]) -> IO ()
-mergeServer done film = do (name, num, dirs) <- atomically $ readTQueue film
-                           files <- waitForNum name [0..num]
+mergeServer :: TQueue ([(String, FilePath)], String, String, Int) -> TQueue (String, String, Int, [String]) -> IO ()
+mergeServer done film = do (name, stream, num, dirs) <- atomically $ readTQueue film
+                           files <- waitForNum name stream [0..num]
                            let sorted = concat $ map snd $ sort files
                                flt l d = map snd $ filter ((== d) . fst) l
                                outputs = zip dirs $ map (flt sorted) dirs
@@ -119,14 +119,14 @@ mergeServer done film = do (name, num, dirs) <- atomically $ readTQueue film
                                   (do mapM_ (uncurry.merge $ name) outputs
                                       mapM_ (removeFile.snd) sorted)
                            mergeServer done film
-                        where waitForNum _ [] = return []
-                              waitForNum name nums = do (f, n, i) <- atomically $ readTQueue done
-                                                        if n == name
-                                                          then do putStrLn $ "Converting " ++ name ++ "-" ++ show i ++ " done. " ++ show (length nums - 1) ++ " to go."
-                                                                  rest <- waitForNum name (L.delete i nums)
-                                                                  return $ (i, f):rest
-                                                          else do atomically $ writeTQueue done (f, n, i)
-                                                                  waitForNum name nums
+                        where waitForNum _ _ [] = return []
+                              waitForNum name stream nums = do (f, n, s, i) <- atomically $ readTQueue done
+                                                               if n == name && s == stream
+                                                                 then do putStrLn $ "Converting " ++ name ++ "-" ++ show i ++ " done. " ++ show (length nums - 1) ++ " to go."
+                                                                         rest <- waitForNum name stream (L.delete i nums)
+                                                                         return $ (i, f):rest
+                                                                 else do atomically $ writeTQueue done (f, s, n, i)
+                                                                         waitForNum name stream nums
                               merge :: String -> FilePath -> [FilePath] -> IO ()
                               merge name dir files = do let list = unlines $ "ffconcat version 1.0":map ("file "++) files
                                                         writeFile "concat.txt" list
